@@ -63,9 +63,9 @@ RUN apk add build-base linux-headers \
 
 # get sources
 WORKDIR /opt
-RUN git clone --depth 1 --branch ${LIBOQS_TAG} https://github.com/open-quantum-safe/liboqs && \
+RUN git clone --depth 1 --branch ${LIBOQS_TAG} https://github.com/rtjk/liboqs && \
     git clone --depth 1 --branch master https://github.com/openssl/openssl ossl-src && \
-    git clone --depth 1 --branch ${OQSPROVIDER_TAG} https://github.com/open-quantum-safe/oqs-provider && \
+    git clone --depth 1 --branch ${OQSPROVIDER_TAG} https://github.com/rtjk/oqs-provider && \
     wget ${APR_MIRROR}/apr/apr-${APR_VERSION}.tar.gz && tar xzvf apr-${APR_VERSION}.tar.gz && \
     wget ${APR_MIRROR}/apr/apr-util-${APRU_VERSION}.tar.gz && tar xzvf apr-util-${APRU_VERSION}.tar.gz && \
     wget --trust-server-names "https://archive.apache.org/dist/httpd/httpd-${HTTPD_VERSION}.tar.gz" && tar -zxvf httpd-${HTTPD_VERSION}.tar.gz;
