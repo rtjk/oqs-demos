@@ -6,5 +6,6 @@ for i in "CROSSrsdp128balanced" "CROSSrsdp128fast" "CROSSrsdp128small" "CROSSrsd
 do
     echo "######################################################################"
     echo $i
-    docker run -e TEST_TIME=5 -e KEM_ALG=kyber768 -e SIG_ALG=$i -it oqs-curl perftest.sh
+    # TEST_TIME=5
+    docker run -e -e KEM_ALG=kyber768 -e SIG_ALG=$i -it oqs-curl perftest.sh
 done
