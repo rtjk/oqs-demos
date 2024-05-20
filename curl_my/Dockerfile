@@ -1,38 +1,35 @@
-# Multi-stage build: First the full builder image:
+
+# Default root CA signature algorithm; can be set to any listed at https://github.com/rtjk/oqs-provider#algorithms
+ARG SIG_ALG_CA="dilithium3"
+ARG SIG_ALG_SERVER="dilithium3"
+
+# define the Curl version to be baked in                        <-<-<-
+ARG CURL_VERSION=7.81.0
+#ARG CURL_VERSION=7.88.1
 
 # define the liboqs tag to be used
 ARG LIBOQS_TAG=main
-
 # define the oqsprovider tag to be used
 ARG OQSPROVIDER_TAG=main
-
-# define the Curl version to be baked in
-ARG CURL_VERSION=7.81.0
-
 # Default location where all binaries wind up:
 ARG INSTALLDIR=/opt/oqssa
-
 # liboqs build type variant; maximum portability of image:
 ARG LIBOQS_BUILD_DEFINES="-DOQS_DIST_BUILD=ON"
-
-# Default root CA signature algorithm; can be set to any listed at https://github.com/rtjk/oqs-provider#algorithms
-ARG SIG_ALG="dilithium3"
-
 # Default KEM algorithms; can be set to any listed at https://github.com/rtjk/oqs-provider#algorithms
 ARG DEFAULT_GROUPS="x25519:x448:kyber512:p256_kyber512:kyber768:p384_kyber768:kyber1024:p521_kyber1024"
-
 # Define the degree of parallelism when building the image; leave the number away only if you know what you are doing
 ARG MAKE_DEFINES="-j 4"
 
+FROM alpine:3.11
 
-FROM alpine:3.11 as intermediate
-# Take in all global args
+ARG SIG_ALG_CA
+ARG SIG_ALG_SERVER
+
 ARG LIBOQS_TAG
 ARG OQSPROVIDER_TAG
 ARG CURL_VERSION
 ARG INSTALLDIR
 ARG LIBOQS_BUILD_DEFINES
-ARG SIG_ALG
 ARG DEFAULT_GROUPS
 ARG MAKE_DEFINES
 
@@ -43,11 +40,7 @@ ENV DEBIAN_FRONTEND noninteractive
 RUN apk update && apk upgrade
 
 # Get all software packages required for builing all components:
-RUN apk add build-base linux-headers \
-            libtool automake autoconf cmake ninja \
-            make \
-            openssl openssl-dev \
-            git wget
+RUN apk add build-base linux-headers libtool automake autoconf cmake ninja make openssl openssl-dev git wget
 
 # get all sources
 WORKDIR /opt
@@ -79,7 +72,7 @@ ENV OPENSSL_CNF=${INSTALLDIR}/ssl/openssl.cnf
 WORKDIR ${INSTALLDIR}/bin
 # generate CA key and cert
 RUN set -x; \
-    ${OPENSSL} req -x509 -new -newkey ${SIG_ALG} -keyout CA.key -out CA.crt -nodes -subj "/CN=oqstest CA" -days 365 -config ${OPENSSL_CNF}
+    ${OPENSSL} req -x509 -new -newkey ${SIG_ALG_CA} -keyout CA.key -out CA.crt -nodes -subj "/CN=oqstest CA" -days 365 -config ${OPENSSL_CNF}
 
 # build curl - injecting OQS CA generated above into root store
 WORKDIR /opt/curl-${CURL_VERSION}
@@ -87,77 +80,21 @@ WORKDIR /opt/curl-${CURL_VERSION}
 # Download and integrate LetsEncrypt Root CA to CA bundle
 RUN wget https://letsencrypt.org/certs/isrgrootx1.pem -O oqs-bundle.pem && cat ${INSTALLDIR}/bin/CA.crt >> oqs-bundle.pem 
 
-# For curl debugging enable it by adding the line below to the configure command:
-#                    --enable-debug \
-
 RUN env LDFLAGS=-Wl,-R${INSTALLDIR}/lib64  \
         ./configure --prefix=${INSTALLDIR} \
                     --with-ca-bundle=${INSTALLDIR}/oqs-bundle.pem \
+                    --enable-debug \
                     --with-ssl=${INSTALLDIR} && \
     make ${MAKE_DEFINES} && make install && mv oqs-bundle.pem ${INSTALLDIR};
 
-# Download current test.openquantumsafe.org test CA cert
-WORKDIR ${INSTALLDIR}
-RUN wget https://test.openquantumsafe.org/CA.crt && mv CA.crt oqs-testca.pem
+WORKDIR /opt/oqssa/bin
 
-WORKDIR /
+RUN set -x && mkdir /opt/test
 
-COPY serverstart.sh ${INSTALLDIR}/bin
+# generate new server CSR using pre-set CA.key & cert
+RUN openssl req -new -newkey ${SIG_ALG_SERVER} -keyout /opt/test/server.key -out /opt/test/server.csr -nodes -subj "/CN=localhost" -config ${OPENSSL_CNF}
 
-CMD ["serverstart.sh"]
+# generate server cert
+RUN openssl x509 -req -in /opt/test/server.csr -out /opt/test/server.crt -CA CA.crt -CAkey CA.key -CAcreateserial -days 365
 
-
-
-
-
-
-
-
-
-
-
-
-
-## second stage: Only create minimal image without build tooling and intermediate build results generated above:
-FROM alpine:3.11 as dev
-# Take in all global args
-ARG INSTALLDIR
-ARG SIG_ALG
-
-# Only retain the ${INSTALLDIR} contents in the final image
-COPY --from=intermediate ${INSTALLDIR} ${INSTALLDIR}
-
-# set path to use 'new' openssl & curl. Dyn libs have been properly linked in to match
-ENV PATH="${INSTALLDIR}/bin:${PATH}"
-
-# generate certificates for openssl s_server, which is what we will test curl against
-ENV OPENSSL=${INSTALLDIR}/bin/openssl
-ENV OPENSSL_CNF=${INSTALLDIR}/ssl/openssl.cnf
-
-WORKDIR ${INSTALLDIR}/bin
-
-# generate server CSR using pre-set CA.key and cert
-# and generate server cert
-RUN set -x && mkdir /opt/test; \
-    ${OPENSSL} req -new -newkey ${SIG_ALG} -keyout /opt/test/server.key -out /opt/test/server.csr -nodes -subj "/CN=localhost" -config ${OPENSSL_CNF}; \
-    ${OPENSSL} x509 -req -in /opt/test/server.csr -out /opt/test/server.crt -CA CA.crt -CAkey CA.key -CAcreateserial -days 365;
-
-COPY serverstart.sh ${INSTALLDIR}/bin
-COPY perftest.sh ${INSTALLDIR}/bin
-
-WORKDIR ${INSTALLDIR}
-
-FROM dev
-ARG INSTALLDIR
-
-WORKDIR /
-
-# Improve size some more: liboqs.a not needed during operation
-RUN rm ${INSTALLDIR}/lib64/liboqs*
-
-# Enable a normal user to create new server keys off set CA
-RUN addgroup -g 1000 -S oqs && adduser --uid 1000 -S oqs -G oqs && chown -R oqs.oqs /opt/test && chmod go+r ${INSTALLDIR}/bin/CA.key && chmod go+w ${INSTALLDIR}/bin/CA.srl
-
-USER oqs
-CMD ["serverstart.sh"]
 STOPSIGNAL SIGTERM
